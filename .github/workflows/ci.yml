@@ -10,7 +10,7 @@ on:
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
-  
+
 jobs:
   enforce-guidelines:
     name: Enforce Guidelines
@@ -35,6 +35,14 @@ jobs:
           echo "Fetched PR description and saved to pr_body.txt"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+       # --- ADD THIS STEP ---
+      - name: Simulate Long-Running Task for Concurrency Test
+        run: |
+          echo "Waiting for 60 seconds to allow for a new push to test cancellation..."
+          sleep 60
+          echo "Resuming job."
+      # --------------------
 
       - name: Check Branch Naming Convention
         run: |
