@@ -7,6 +7,9 @@ on:
   pull_request:
     branches:
       - '**'
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   enforce-guidelines:
@@ -32,6 +35,7 @@ jobs:
           echo "Fetched PR description and saved to pr_body.txt"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
 
       - name: Check Branch Naming Convention
         run: |
@@ -92,7 +96,11 @@ jobs:
           DELETED_FILES=$(git diff --name-only --diff-filter=D origin/$TARGET_BRANCH...origin/$SOURCE_BRANCH)
           
           FILE_COUNT=$(echo "$CHANGED_FILES" | wc -l)
-          DELETED_COUNT=$(echo "$DELETED_FILES" | wc -l)
+          if [ -z "$DELETED_FILES" ]; then
+            DELETED_COUNT=0
+          else
+            DELETED_COUNT=$(echo "$DELETED_FILES" | wc -l)
+          fi
           NON_DELETED_COUNT=$((FILE_COUNT - DELETED_COUNT))
           
           MAX_FILES=20
