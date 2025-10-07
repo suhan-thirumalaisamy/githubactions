@@ -1,0 +1,319 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches:
+      - develop
+  pull_request:
+    branches:
+      - '**'
+
+jobs:
+  enforce-guidelines:
+    name: Enforce Guidelines
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch PR Description
+        id: pr-desc
+        run: |
+          PR_BODY=$(gh pr view ${{ github.event.pull_request.number }} --json body --jq .body)
+          echo "$PR_BODY" > pr_body.txt
+          echo "Fetched PR description and saved to pr_body.txt"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check Branch Naming Convention
+        run: |
+          echo "🔍 Full source branch: ${{ github.head_ref }}"
+          echo "🔍 Full target branch: ${{ github.base_ref }}"
+          
+          SOURCE_BRANCH="${{ github.head_ref }}"
+          TARGET_BRANCH="${{ github.base_ref }}"
+          
+          echo "🔍 Current branch name: ($SOURCE_BRANCH)"
+          
+          # Prepare summary file
+          PIPELINE_SUMMARY=""
+          PIPELINE_SUMMARY+=$'Check Branch Naming Convention\n'
+          
+          # Define allowed branch patterns based on team guidelines
+          TASK_PATTERN="^task/[0-9]+-[a-z0-9-]+$"
+          BUG_PATTERN="^bug/[0-9]+-[a-z0-9-]+$"
+          MISC_PATTERN="^misc/[a-z0-9-]+$"
+          RELEASE_PATTERN="^release/[0-9]+\.[0-9]+(\.[0-9]+)?(-[a-z0-9-]+)?$"
+          
+          if [[ $SOURCE_BRANCH =~ $TASK_PATTERN ]] || \
+              [[ $SOURCE_BRANCH =~ $BUG_PATTERN ]] || \
+              [[ $SOURCE_BRANCH =~ $MISC_PATTERN ]] || \
+              [[ $SOURCE_BRANCH =~ $RELEASE_PATTERN ]]; then
+            BRANCH_STATUS_MSG="✅ Branch name follows convention"
+            echo "$BRANCH_STATUS_MSG"
+            PIPELINE_SUMMARY+="$BRANCH_STATUS_MSG\n"
+          else
+            BRANCH_ERROR_MSG=$'❌ Branch name does not follow convention!\n\nBranch naming guidelines:\n- task/<workitem-id>-short-desc\n- bug/<workitem-id>-short-desc\n- misc/<short-desc>\n- release/<version>-short-desc\n\nExamples:\n- task/1234-add-tax-calculation\n- bug/5678-fix-login-error\n- misc/update-dependencies\n- release/1.2.0-hotfix\n\nAvoid generic names like \'fix\', \'update\', or \'dev\''
+            echo "$BRANCH_ERROR_MSG"
+            PIPELINE_SUMMARY+="$BRANCH_ERROR_MSG\n"
+            echo -e "$PIPELINE_SUMMARY" >> pipeline_summary.txt
+            exit 1
+          fi
+          
+          echo -e "$PIPELINE_SUMMARY" >> pipeline_summary.txt
+          
+          echo "✅ Source branch: $SOURCE_BRANCH"
+          echo "✅ Target branch: $TARGET_BRANCH"
+
+      - name: Validate PR File Change Count
+        continue-on-error: true
+        run: |
+          echo "🔄 Fetching target branch..."
+          git fetch origin
+          
+          SOURCE_BRANCH="${{ github.head_ref }}"
+          TARGET_BRANCH="${{ github.base_ref }}"
+          
+          echo "🔍 Source Branch: $SOURCE_BRANCH"
+          echo "🔍 Target Branch: $TARGET_BRANCH"
+          
+          PIPELINE_SUMMARY+=$'\n\n🔍 Validate PR File Change Count\n'
+          
+          # Get changed and deleted files
+          CHANGED_FILES=$(git diff --name-only origin/$TARGET_BRANCH...origin/$SOURCE_BRANCH)
+          DELETED_FILES=$(git diff --name-only --diff-filter=D origin/$TARGET_BRANCH...origin/$SOURCE_BRANCH)
+          
+          FILE_COUNT=$(echo "$CHANGED_FILES" | wc -l)
+          DELETED_COUNT=$(echo "$DELETED_FILES" | wc -l)
+          NON_DELETED_COUNT=$((FILE_COUNT - DELETED_COUNT))
+          
+          MAX_FILES=20
+          
+          # Check for static assets (images, stylesheets, fonts)
+          STATIC_FILES=$(echo "$CHANGED_FILES" | grep -E '\.(png|jpg|jpeg|gif|svg|css|scss|sass|less|ico|woff|woff2|ttf|eot)$' | wc -l)
+          
+          FILE_COUNT_MSG=$"📊 File Summary:\n  ➕ Total changed files: $FILE_COUNT\n  ❌ Deleted files: $DELETED_COUNT\n  📁 Non-deleted files: $NON_DELETED_COUNT\n  🎨 Static assets: $STATIC_FILES\n  🚦 Max allowed: $MAX_FILES\n"
+          echo "$FILE_COUNT_MSG"
+          PIPELINE_SUMMARY+="$FILE_COUNT_MSG\n"
+          
+          # Decision logic
+          if [ $NON_DELETED_COUNT -gt $MAX_FILES ] && [ $STATIC_FILES -eq 0 ]; then
+            FILE_ERROR_MSG=$'❌ Too many files changed in this PR!\n\nGuidelines:\n- Keep PRs small with ≤'$MAX_FILES$' files for easy review\n- Exceeding '$MAX_FILES$' is only allowed for:\n  • File deletions\n  • Static assets (images, stylesheets, fonts)\n- Consider breaking this into smaller PRs\n\n🔧 Changed files:\n'$CHANGED_FILES
+            echo "$FILE_ERROR_MSG"
+            PIPELINE_SUMMARY+="$FILE_ERROR_MSG\n"
+            echo -e "$PIPELINE_SUMMARY" >> pipeline_summary.txt
+            exit 1
+          else
+            FILE_OK_MSG="✅ File count is within acceptable limits"
+            echo "$FILE_OK_MSG"
+            PIPELINE_SUMMARY+="$FILE_OK_MSG\n"
+            if [ $STATIC_FILES -gt 0 ] || [ $DELETED_COUNT -gt 0 ]; then
+              FILE_INFO_MSG="ℹ️  Exceeding limit allowed due to deletions or static assets"
+              echo "$FILE_INFO_MSG"
+              PIPELINE_SUMMARY+="$FILE_INFO_MSG\n"
+            fi
+          fi
+          
+          echo -e "$PIPELINE_SUMMARY" >> pipeline_summary.txt
+          
+          echo "✅ Source branch: $SOURCE_BRANCH"
+          echo "✅ Target branch: $TARGET_BRANCH"
+
+      - name: Check PR Description Requirements
+        run: |
+          PR_BODY=$(cat pr_body.txt)
+          BRANCH_NAME="${{ github.head_ref }}"
+          echo "🔍 BRANCH NAME: $BRANCH_NAME"
+          
+          PIPELINE_SUMMARY=$'\n\n✅ Check PR Description Requirements\n'
+          
+          if [ -z "$PR_BODY" ] || [ ${#PR_BODY} -lt 50 ]; then
+            PR_DESC_ERROR_MSG=$'❌ PR description is too short or missing!\n\nRequired context in PR description:\n- Link ADO Task/Work Item with the PR\n- Design mockup link (if applicable)\n- Screenshots or screen recordings for UI/UX changes\n- Test evidence (screenshots, logs, or coverage reports)\n\nFor bug fixes, describe:\n1. Problem Statement\n2. Root Cause\n3. Fix & Reasoning\n\nFor tasks/misc, mention what was added/modified and why.'
+            echo "$PR_DESC_ERROR_MSG"
+            PIPELINE_SUMMARY+="$PR_DESC_ERROR_MSG\n"
+            echo -e "$PIPELINE_SUMMARY" >> pipeline_summary.txt
+            exit 1
+          fi
+          
+          # Check for specific requirements based on branch type
+          if [[ "$BRANCH_NAME" =~ ^bug/ ]]; then
+            if [[ ! "$PR_BODY" =~ [Pp]roblem ]] && [[ ! "$PR_BODY" =~ [Ii]ssue ]]; then
+              echo "⚠️ Bug fix should include Problem Statement"
+              PIPELINE_SUMMARY+=$'⚠️ Bug fix should include Problem Statement\n'
+            fi
+            if [[ ! "$PR_BODY" =~ [Rr]oot[[:space:]]*[Cc]ause ]] && [[ ! "$PR_BODY" =~ [Cc]ause ]]; then
+              echo "⚠️ Bug fix should include Root Cause analysis"
+              PIPELINE_SUMMARY+=$'⚠️ Bug fix should include Root Cause analysis\n'
+            fi
+            if [[ ! "$PR_BODY" =~ [Ff]ix ]] && [[ ! "$PR_BODY" =~ [Ss]olution ]]; then
+              echo "⚠️ Bug fix should include Fix & Reasoning"
+              PIPELINE_SUMMARY+=$'⚠️ Bug fix should include Fix & Reasoning\n'
+            fi
+          fi
+          
+          PR_DESC_OK_MSG="✅ PR Description Check Completed"
+          echo "$PR_DESC_OK_MSG"
+          PIPELINE_SUMMARY+="$PR_DESC_OK_MSG\n"
+          
+          echo -e "$PIPELINE_SUMMARY" >> pipeline_summary.txt
+          
+          echo "✅ PR Description Check Completed"
+
+      - name: Check Test Coverage Evidence
+        run: |
+          PR_BODY=$(cat pr_body.txt)
+          TEST_KEYWORDS="test|coverage|spec|junit|screenshot|evidence|log"
+          
+          PIPELINE_SUMMARY=$'\n\n🧪 Check Test Coverage Evidence\n'
+          
+          if echo "$PR_BODY" | grep -iqE "$TEST_KEYWORDS"; then
+            TEST_OK_MSG="✅ Test coverage evidence mentioned"
+            echo "$TEST_OK_MSG"
+            PIPELINE_SUMMARY+="$TEST_OK_MSG\n"
+          else
+            TEST_WARN_MSG=$'⚠️ Missing test coverage evidence\n\nPlease include:\n- Evidence of new or updated unit/integration test coverage\n- Mention test cases added\n- Provide test run success proof (screenshots, logs, coverage reports)'
+            echo "$TEST_WARN_MSG"
+            PIPELINE_SUMMARY+="$TEST_WARN_MSG\n"
+          fi
+          
+          echo -e "$PIPELINE_SUMMARY" >> pipeline_summary.txt
+          
+          echo "✅ Test coverage evidence mentioned"
+
+      - name: Check for UI/UX Changes
+        continue-on-error: true
+        run: |
+          echo "🔍 Checking for UI/UX changes..."
+          
+          git fetch origin
+          
+          SOURCE_BRANCH="${{ github.head_ref }}"
+          TARGET_BRANCH="${{ github.base_ref }}"
+          
+          echo "Source Branch: $SOURCE_BRANCH"
+          echo "Target Branch: $TARGET_BRANCH"
+          
+          CHANGED_FILES=$(git diff --name-only origin/$TARGET_BRANCH...origin/$SOURCE_BRANCH)
+          
+          echo "Changed Files: $CHANGED_FILES"
+          
+          UI_FILES=$(echo "$CHANGED_FILES" | grep -E '\.(tsx|jsx|scss|css|html)$' | wc -l)
+          PR_BODY=$(cat pr_body.txt)
+          
+          PIPELINE_SUMMARY=$'\n\n🎨 Check for UI/UX Changes\n'
+          echo "Checking conditions"
+          if [ "$UI_FILES" -gt 0 ]; then
+            UI_DETECTED_MSG="🖼️ UI/UX files detected: $UI_FILES"
+            echo "$UI_DETECTED_MSG"
+            PIPELINE_SUMMARY+="$UI_DETECTED_MSG\n"
+            if echo "$PR_BODY" | grep -iqE "screenshot|image|recording|video|mockup|design"; then
+              UI_OK_MSG="✅ UI/UX changes include visual evidence"
+              echo "$UI_OK_MSG"
+              PIPELINE_SUMMARY+="$UI_OK_MSG\n"
+            else
+              UI_WARN_MSG=$'⚠️ UI/UX changes detected but no visual evidence provided\n\nPlease include:\n- Screenshots or screen recordings\n- Design mockup links (if applicable)'
+              echo "$UI_WARN_MSG"
+              PIPELINE_SUMMARY+="$UI_WARN_MSG\n"
+            fi
+          else
+            UI_NONE_MSG="✅ No UI/UX files modified"
+            echo "$UI_NONE_MSG"
+            PIPELINE_SUMMARY+="$UI_NONE_MSG\n"
+          fi
+          
+          echo -e "$PIPELINE_SUMMARY" >> pipeline_summary.txt
+          
+          echo "✅ No UI/UX files modified"
+
+      - name: Post PR Guidelines Summary as Comment
+        continue-on-error: true
+        run: |
+          SUMMARY_CONTENT=$(cat pipeline_summary.txt)
+          
+          # Post comment using GitHub CLI
+          gh pr comment ${{ github.event.pull_request.number }} --body "$SUMMARY_CONTENT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  pr-validation:
+    name: PR Validation
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      - name: Install dependencies
+        run: npm cache clean --force && rm -rf node_modules package-lock.json && npm install
+
+      - name: Run linter
+        run: npm run lint
+
+      - name: Run Prettier
+        run: npm run format
+
+      - name: Run Test Cases with Coverage
+        run: npm run test:ci
+
+      - name: Publish Test Results
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        if: always()
+        with:
+          files: |
+            coverage/test-report/junit-report.xml
+          check_name: Test Results
+
+      - name: Publish Code Coverage Results
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage/cobertura-coverage.xml
+          fail_ci_if_error: true
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Run Build
+        run: npm run build:production
+
+      # Note: GitHub Actions doesn't have a direct equivalent to Azure DevOps WorkItemUpdater
+      # You'll need to implement work item state updates using Azure DevOps REST API or GitHub Projects API
+      # Example placeholder:
+      # - name: Update Work Item State
+      #   run: |
+      #     # Add custom script to update Azure DevOps work items via REST API
+      #     # or integrate with GitHub Projects if using GitHub Issues
+
+  develop-build:
+    name: Build & Publish on Develop
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      - name: Install dependencies
+        run: npm cache clean --force && rm -rf node_modules package-lock.json && npm install
+
+      - name: Run Build
+        run: npm run build:production
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 30
