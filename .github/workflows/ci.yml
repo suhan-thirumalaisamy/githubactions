@@ -11,7 +11,7 @@ on:
 jobs:
   enforce-guidelines:
     name: Enforce Guidelines
-    runs-on: ubuntu-latest
+    runs-on: codebuild-test-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
     if: github.event_name == 'pull_request'
 
     permissions:
@@ -245,7 +245,7 @@ jobs:
 
   pr-validation:
     name: PR Validation
-    runs-on: ubuntu-latest
+    runs-on: codebuild-test-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
     if: github.event_name == 'pull_request'
     
     steps:
@@ -297,7 +297,7 @@ jobs:
 
   develop-build:
     name: Build & Publish on Develop
-    runs-on: ubuntu-latest
+    runs-on: codebuild-test-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
     if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
     
     steps:
